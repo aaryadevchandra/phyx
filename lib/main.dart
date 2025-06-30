@@ -125,7 +125,7 @@ class _PhyxPoCState extends State<PhyxPoC> {
   }
 
   InputImage? _inputImageFromCameraImage(CameraImage image,
-      CameraDescription camera, CameraController _controller) {
+      CameraDescription camera, CameraController controller) {
     // get image rotation
     // it is used in android to convert the InputImage from Dart to Java
     // `rotation` is not used in iOS to convert the InputImage from Dart to Obj-C
@@ -136,7 +136,7 @@ class _PhyxPoCState extends State<PhyxPoC> {
       rotation = InputImageRotationValue.fromRawValue(sensorOrientation);
     } else if (Platform.isAndroid) {
       var rotationCompensation =
-          _orientations[_controller.value.deviceOrientation];
+          _orientations[controller.value.deviceOrientation];
       if (rotationCompensation == null) return null;
       if (camera.lensDirection == CameraLensDirection.front) {
         // front-facing
@@ -192,6 +192,7 @@ class _PhyxPoCState extends State<PhyxPoC> {
         ),
       );
     }
+    return null;
   }
 
   void _startProcessing() {
