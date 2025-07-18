@@ -37,10 +37,12 @@ class _PhyxPoCState extends State<PhyxPoC> {
     });
 
     _cameraController = CameraController(
-      camera, ResolutionPreset.medium, enableAudio: false,
+      camera,
+      ResolutionPreset.medium,
+      enableAudio: false,
       imageFormatGroup: Platform.isAndroid
-          ? ImageFormatGroup.nv21 // for Android
-          : ImageFormatGroup.bgra8888, // for iOS
+          ? ImageFormatGroup.nv21
+          : ImageFormatGroup.bgra8888,
     );
 
     _initializeControllerFuture = _cameraController.initialize();
@@ -60,7 +62,6 @@ class _PhyxPoCState extends State<PhyxPoC> {
 
   @override
   void dispose() {
-    // Dispose of the controller when the widget is disposed.
     _cameraController.dispose();
     _poseDetector.close();
     super.dispose();
@@ -77,33 +78,27 @@ class _PhyxPoCState extends State<PhyxPoC> {
     final width = image.width;
     final height = image.height;
 
-    // Planes from CameraImage
     final yPlane = image.planes[0];
     final uPlane = image.planes[1];
     final vPlane = image.planes[2];
 
-    // Buffers from Y, U, and V planes
     final yBuffer = yPlane.bytes;
     final uBuffer = uPlane.bytes;
     final vBuffer = vPlane.bytes;
 
-    // Total number of pixels in NV21 format
     final numPixels = width * height + (width * height ~/ 2);
     final nv21 = Uint8List(numPixels);
 
-    // Y (Luma) plane metadata
     int idY = 0;
-    int idUV = width * height; // Start UV after Y plane
+    int idUV = width * height;
     final uvWidth = width ~/ 2;
     final uvHeight = height ~/ 2;
 
-    // Strides and pixel strides for Y and UV planes
     final yRowStride = yPlane.bytesPerRow;
     final yPixelStride = yPlane.bytesPerPixel ?? 1;
     final uvRowStride = uPlane.bytesPerRow;
     final uvPixelStride = uPlane.bytesPerPixel ?? 2;
 
-    // Copy Y (Luma) channel
     for (int y = 0; y < height; ++y) {
       final yOffset = y * yRowStride;
       for (int x = 0; x < width; ++x) {
@@ -111,22 +106,20 @@ class _PhyxPoCState extends State<PhyxPoC> {
       }
     }
 
-    // Copy UV (Chroma) channels in NV21 format (YYYYVU interleaved)
     for (int y = 0; y < uvHeight; ++y) {
       final uvOffset = y * uvRowStride;
       for (int x = 0; x < uvWidth; ++x) {
         final bufferIndex = uvOffset + (x * uvPixelStride);
-        nv21[idUV++] = vBuffer[bufferIndex]; // V channel
-        nv21[idUV++] = uBuffer[bufferIndex]; // U channel
+        nv21[idUV++] = vBuffer[bufferIndex];
+        nv21[idUV++] = uBuffer[bufferIndex];
       }
     }
 
     return nv21;
   }
 
-  InputImage? _inputImageFromCameraImage(CameraImage image,
-      CameraDescription camera, CameraController controller) {
-    // get image rotation
+  InputImage? _inputImageFromCameraImage(
+      CameraImage image, CameraDescription camera, CameraController controller) {
     final sensorOrientation = camera.sensorOrientation;
     InputImageRotation? rotation;
 
@@ -137,27 +130,19 @@ class _PhyxPoCState extends State<PhyxPoC> {
           _orientations[controller.value.deviceOrientation];
       if (rotationCompensation == null) return null;
       if (camera.lensDirection == CameraLensDirection.front) {
-        // front-facing
         rotationCompensation = (sensorOrientation + rotationCompensation) % 360;
       } else {
-        // back-facing
         rotationCompensation =
             (sensorOrientation - rotationCompensation + 360) % 360;
       }
       rotation = InputImageRotationValue.fromRawValue(rotationCompensation);
     }
 
-    if (rotation == null) {
-      return null;
-    }
+    if (rotation == null) return null;
 
-    // get image format
     final format = InputImageFormatValue.fromRawValue(image.format.raw);
-    if (format == null) {
-      return null;
-    }
+    if (format == null) return null;
 
-    // Handle iOS bgra8888 format
     if (Platform.isIOS && format == InputImageFormat.bgra8888) {
       if (image.planes.length != 1) return null;
       final plane = image.planes.first;
@@ -173,10 +158,8 @@ class _PhyxPoCState extends State<PhyxPoC> {
       );
     }
 
-    // Handle Android yuv_420_888 format (convert to nv21)
     if (Platform.isAndroid && format == InputImageFormat.yuv_420_888) {
       Uint8List nv21Data = convertYUV420ToNV21(image);
-
       return InputImage.fromBytes(
         bytes: nv21Data,
         metadata: InputImageMetadata(
@@ -188,7 +171,6 @@ class _PhyxPoCState extends State<PhyxPoC> {
       );
     }
 
-    // Handle Android nv21 format
     if (Platform.isAndroid && format == InputImageFormat.nv21) {
       if (image.planes.length != 1) return null;
       final plane = image.planes.first;
@@ -220,18 +202,11 @@ class _PhyxPoCState extends State<PhyxPoC> {
             _inputImageFromCameraImage(image, camera, _cameraController);
         if (inputImage != null) {
           List<Pose> poses = await _poseDetector.processImage(inputImage);
-
           setState(() {
             this.poses = poses;
+            _detectionText =
+                poses.isNotEmpty ? "Pose Detected" : "No pose detected";
           });
-
-          if (poses.isNotEmpty) {
-            print('Pose detected');
-            setState(() {
-              _detectionText = "Pose Detected";
-              this.poses = poses;
-            });
-          }
         }
       } catch (e) {
         print("Error while processing frame: $e");
@@ -244,54 +219,44 @@ class _PhyxPoCState extends State<PhyxPoC> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-        body: Column(
-      children: [
-        Expanded(
-          child: _initializeControllerFuture == null
-              ? Center(
-                  child: CircularProgressIndicator(),
-                )
-              : FutureBuilder(
-                  future: _initializeControllerFuture,
-                  builder: (context, snapshot) {
-                    if (snapshot.connectionState == ConnectionState.done) {
-                      return CameraPreview(_cameraController);
-                    } else {
-                      return CircularProgressIndicator();
-                    }
-                  }),
-        ),
-        Expanded(
-          child: poses != null
-              ? Container(
-                  decoration: BoxDecoration(
-                    border: Border.all(color: Colors.red, width: 2),
+      body: Column(
+        children: [
+          Expanded(
+            child: _initializeControllerFuture == null
+                ? Center(child: CircularProgressIndicator())
+                : FutureBuilder(
+                    future: _initializeControllerFuture,
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.done) {
+                        return CameraPreview(_cameraController);
+                      } else {
+                        return CircularProgressIndicator();
+                      }
+                    },
                   ),
-                  child: CustomPaint(
+          ),
+          Expanded(
+            child: poses != null
+                ? CustomPaint(
                     painter: LandmarkPainter(
                       poses!,
-                      Size(
-                          cameraImgForSize.width.toDouble(),
-                          cameraImgForSize.height
-                              .toDouble()), // Input image size
+                      Size(cameraImgForSize.width.toDouble(),
+                          cameraImgForSize.height.toDouble()),
                     ),
                     size: Size(MediaQuery.of(context).size.width,
-                        MediaQuery.of(context).size.height), // Canvas size
-                  ),
-                )
-              : Center(
-                  child: Text("Nothing yet :)"),
-                ),
-        )
-      ],
-    ));
+                        MediaQuery.of(context).size.height),
+                  )
+                : Center(child: Text("Nothing yet :)")),
+          )
+        ],
+      ),
+    );
   }
 }
 
 class LandmarkPainter extends CustomPainter {
-  Paint paintt = Paint()..color = Colors.black;
+  final List<Pose> poses;
   final Size imageSize;
-  List<Pose> poses;
 
   LandmarkPainter(this.poses, this.imageSize);
 
@@ -299,18 +264,84 @@ class LandmarkPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final scaleX = size.width / imageSize.width;
     final scaleY = size.height / imageSize.height;
+
     for (Pose pose in poses) {
+      _drawPoseConnections(canvas, pose, scaleX, scaleY);
+
       pose.landmarks.forEach((_, landmark) {
         final x = landmark.x * scaleX;
         final y = landmark.y * scaleY;
+        final z = landmark.z;
 
-        canvas.drawCircle(Offset(x, y), 5, paintt);
+        final radius = 6.0;
+        final pointPaint = Paint()
+          ..color = Colors.black
+          ..style = PaintingStyle.fill;
+
+        canvas.drawCircle(Offset(x, y), radius, pointPaint);
+
+        _drawCoordinateLabel(canvas, x, y, landmark.x, landmark.y, z);
       });
     }
   }
 
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) {
-    return true;
+  void _drawPoseConnections(Canvas canvas, Pose pose, double scaleX, double scaleY) {
+    final connectionPaint = Paint()
+      ..color = Colors.black
+      ..strokeWidth = 2.0;
+
+    final connections = [
+      [PoseLandmarkType.leftShoulder, PoseLandmarkType.rightShoulder],
+      [PoseLandmarkType.leftHip, PoseLandmarkType.rightHip],
+      [PoseLandmarkType.leftShoulder, PoseLandmarkType.leftElbow],
+      [PoseLandmarkType.leftElbow, PoseLandmarkType.leftWrist],
+      [PoseLandmarkType.rightShoulder, PoseLandmarkType.rightElbow],
+      [PoseLandmarkType.rightElbow, PoseLandmarkType.rightWrist],
+      [PoseLandmarkType.leftHip, PoseLandmarkType.leftKnee],
+      [PoseLandmarkType.leftKnee, PoseLandmarkType.leftAnkle],
+      [PoseLandmarkType.rightHip, PoseLandmarkType.rightKnee],
+      [PoseLandmarkType.rightKnee, PoseLandmarkType.rightAnkle],
+    ];
+
+    for (var pair in connections) {
+      final p1 = pose.landmarks[pair[0]];
+      final p2 = pose.landmarks[pair[1]];
+
+      if (p1 != null && p2 != null) {
+        canvas.drawLine(
+          Offset(p1.x * scaleX, p1.y * scaleY),
+          Offset(p2.x * scaleX, p2.y * scaleY),
+          connectionPaint,
+        );
+      }
+    }
   }
+
+  void _drawCoordinateLabel(Canvas canvas, double screenX, double screenY,
+      double originalX, double originalY, double z) {
+    final coordText =
+        "(${originalX.toStringAsFixed(1)}, ${originalY.toStringAsFixed(1)}, ${z.toStringAsFixed(2)})";
+        print(coordText);
+
+    final span = TextSpan(
+      style: TextStyle(
+        color: Colors.black,
+        fontSize: 10,
+        backgroundColor: Colors.white.withOpacity(0.8),
+      ),
+      text: coordText,
+    );
+
+    final tp = TextPainter(
+      text: span,
+      textAlign: TextAlign.left,
+      textDirection: TextDirection.ltr,
+    );
+
+    tp.layout();
+    tp.paint(canvas, Offset(screenX + 5, screenY - 15));
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
