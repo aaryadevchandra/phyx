@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 
-void main() {
+void main() async {
+  // Ensure Flutter bindings are initialized
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(MaterialApp(home: PhyxPoC()));
 }
 
@@ -16,40 +18,60 @@ class PhyxPoC extends StatefulWidget {
 }
 
 class _PhyxPoCState extends State<PhyxPoC> {
-  late CameraController _cameraController;
+  CameraController? _cameraController;
   Future<void>? _initializeControllerFuture;
-  late bool cameraInitialized = false;
-  late CameraDescription camera;
+  bool cameraInitialized = false;
+  CameraDescription? camera;
   List<Pose>? poses;
   String _detectionText = "No pose detected";
   late final PoseDetector _poseDetector;
-  late CameraImage cameraImgForSize;
+  CameraImage? cameraImgForSize;
   bool _isProcessingFrame = false;
+  String? _errorMessage;
 
   void _initCamera() async {
-    await availableCameras().then((availableCameras) {
-      setState(() {
-        cameraInitialized = true;
-        camera = availableCameras.first;
-      });
+    try {
+      final cameras = await availableCameras();
+      
+      if (cameras.isEmpty) {
+        setState(() {
+          _errorMessage = "No cameras available";
+        });
+        return;
+      }
 
-      return availableCameras;
-    });
+      // Find back camera, fallback to first available
+      camera = cameras.firstWhere(
+        (camera) => camera.lensDirection == CameraLensDirection.back,
+        orElse: () => cameras.first,
+      );
 
-    _cameraController = CameraController(
-      camera,
-      ResolutionPreset.medium,
-      enableAudio: false,
-      imageFormatGroup: Platform.isAndroid
-          ? ImageFormatGroup.nv21
-          : ImageFormatGroup.bgra8888,
-    );
+      _cameraController = CameraController(
+        camera!,
+        ResolutionPreset.medium,
+        enableAudio: false,
+        imageFormatGroup: Platform.isAndroid
+            ? ImageFormatGroup.nv21
+            : ImageFormatGroup.bgra8888,
+      );
 
-    _initializeControllerFuture = _cameraController.initialize();
+      _initializeControllerFuture = _cameraController!.initialize();
+      await _initializeControllerFuture;
 
-    await _initializeControllerFuture;
-
-    _startProcessing();
+      if (mounted) {
+        setState(() {
+          cameraInitialized = true;
+        });
+        _startProcessing();
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = "Camera initialization failed: $e";
+        });
+      }
+      print("Camera initialization error: $e");
+    }
   }
 
   @override
@@ -62,7 +84,7 @@ class _PhyxPoCState extends State<PhyxPoC> {
 
   @override
   void dispose() {
-    _cameraController.dispose();
+    _cameraController?.dispose();
     _poseDetector.close();
     super.dispose();
   }
@@ -120,93 +142,107 @@ class _PhyxPoCState extends State<PhyxPoC> {
 
   InputImage? _inputImageFromCameraImage(
       CameraImage image, CameraDescription camera, CameraController controller) {
-    final sensorOrientation = camera.sensorOrientation;
-    InputImageRotation? rotation;
+    try {
+      final sensorOrientation = camera.sensorOrientation;
+      InputImageRotation? rotation;
 
-    if (Platform.isIOS) {
-      rotation = InputImageRotationValue.fromRawValue(sensorOrientation);
-    } else if (Platform.isAndroid) {
-      var rotationCompensation =
-          _orientations[controller.value.deviceOrientation];
-      if (rotationCompensation == null) return null;
-      if (camera.lensDirection == CameraLensDirection.front) {
-        rotationCompensation = (sensorOrientation + rotationCompensation) % 360;
-      } else {
-        rotationCompensation =
-            (sensorOrientation - rotationCompensation + 360) % 360;
+      if (Platform.isIOS) {
+        rotation = InputImageRotationValue.fromRawValue(sensorOrientation);
+      } else if (Platform.isAndroid) {
+        var rotationCompensation =
+            _orientations[controller.value.deviceOrientation];
+        if (rotationCompensation == null) return null;
+        if (camera.lensDirection == CameraLensDirection.front) {
+          rotationCompensation = (sensorOrientation + rotationCompensation) % 360;
+        } else {
+          rotationCompensation =
+              (sensorOrientation - rotationCompensation + 360) % 360;
+        }
+        rotation = InputImageRotationValue.fromRawValue(rotationCompensation);
       }
-      rotation = InputImageRotationValue.fromRawValue(rotationCompensation);
+
+      if (rotation == null) return null;
+
+      final format = InputImageFormatValue.fromRawValue(image.format.raw);
+      if (format == null) return null;
+
+      if (Platform.isIOS && format == InputImageFormat.bgra8888) {
+        if (image.planes.length != 1) return null;
+        final plane = image.planes.first;
+
+        return InputImage.fromBytes(
+          bytes: plane.bytes,
+          metadata: InputImageMetadata(
+            size: Size(image.width.toDouble(), image.height.toDouble()),
+            rotation: rotation,
+            format: format,
+            bytesPerRow: plane.bytesPerRow,
+          ),
+        );
+      }
+
+      if (Platform.isAndroid && format == InputImageFormat.yuv_420_888) {
+        Uint8List nv21Data = convertYUV420ToNV21(image);
+        return InputImage.fromBytes(
+          bytes: nv21Data,
+          metadata: InputImageMetadata(
+            size: Size(image.width.toDouble(), image.height.toDouble()),
+            rotation: rotation,
+            format: InputImageFormat.nv21,
+            bytesPerRow: image.width,
+          ),
+        );
+      }
+
+      if (Platform.isAndroid && format == InputImageFormat.nv21) {
+        if (image.planes.length != 1) return null;
+        final plane = image.planes.first;
+
+        return InputImage.fromBytes(
+          bytes: plane.bytes,
+          metadata: InputImageMetadata(
+            size: Size(image.width.toDouble(), image.height.toDouble()),
+            rotation: rotation,
+            format: format,
+            bytesPerRow: plane.bytesPerRow,
+          ),
+        );
+      }
+
+      return null;
+    } catch (e) {
+      print("Error creating InputImage: $e");
+      return null;
     }
-
-    if (rotation == null) return null;
-
-    final format = InputImageFormatValue.fromRawValue(image.format.raw);
-    if (format == null) return null;
-
-    if (Platform.isIOS && format == InputImageFormat.bgra8888) {
-      if (image.planes.length != 1) return null;
-      final plane = image.planes.first;
-
-      return InputImage.fromBytes(
-        bytes: plane.bytes,
-        metadata: InputImageMetadata(
-          size: Size(image.width.toDouble(), image.height.toDouble()),
-          rotation: rotation,
-          format: format,
-          bytesPerRow: plane.bytesPerRow,
-        ),
-      );
-    }
-
-    if (Platform.isAndroid && format == InputImageFormat.yuv_420_888) {
-      Uint8List nv21Data = convertYUV420ToNV21(image);
-      return InputImage.fromBytes(
-        bytes: nv21Data,
-        metadata: InputImageMetadata(
-          size: Size(image.width.toDouble(), image.height.toDouble()),
-          rotation: rotation,
-          format: InputImageFormat.nv21,
-          bytesPerRow: image.width,
-        ),
-      );
-    }
-
-    if (Platform.isAndroid && format == InputImageFormat.nv21) {
-      if (image.planes.length != 1) return null;
-      final plane = image.planes.first;
-
-      return InputImage.fromBytes(
-        bytes: plane.bytes,
-        metadata: InputImageMetadata(
-          size: Size(image.width.toDouble(), image.height.toDouble()),
-          rotation: rotation,
-          format: format,
-          bytesPerRow: plane.bytesPerRow,
-        ),
-      );
-    }
-
-    return null;
   }
 
   void _startProcessing() {
-    _cameraController.startImageStream((CameraImage image) async {
+    if (_cameraController == null || !_cameraController!.value.isInitialized) {
+      return;
+    }
+
+    _cameraController!.startImageStream((CameraImage image) async {
       if (_isProcessingFrame) return;
       _isProcessingFrame = true;
-      setState(() {
-        cameraImgForSize = image;
-      });
+      
+      if (mounted) {
+        setState(() {
+          cameraImgForSize = image;
+        });
+      }
 
       try {
         InputImage? inputImage =
-            _inputImageFromCameraImage(image, camera, _cameraController);
+            _inputImageFromCameraImage(image, camera!, _cameraController!);
         if (inputImage != null) {
           List<Pose> poses = await _poseDetector.processImage(inputImage);
-          setState(() {
-            this.poses = poses;
-            _detectionText =
-                poses.isNotEmpty ? "Pose Detected" : "No pose detected";
-          });
+          if (mounted) {
+            setState(() {
+              this.poses = poses;
+              _detectionText =
+                  poses.isNotEmpty ? "Pose Detected" : "No pose detected";
+            });
+          }
         }
       } catch (e) {
         print("Error while processing frame: $e");
@@ -219,37 +255,90 @@ class _PhyxPoCState extends State<PhyxPoC> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Column(
-        children: [
-          Expanded(
-            child: _initializeControllerFuture == null
-                ? Center(child: CircularProgressIndicator())
-                : FutureBuilder(
-                    future: _initializeControllerFuture,
-                    builder: (context, snapshot) {
-                      if (snapshot.connectionState == ConnectionState.done) {
-                        return CameraPreview(_cameraController);
-                      } else {
-                        return CircularProgressIndicator();
-                      }
-                    },
-                  ),
-          ),
-          Expanded(
-            child: poses != null
-                ? CustomPaint(
-                    painter: LandmarkPainter(
-                      poses!,
-                      Size(cameraImgForSize.width.toDouble(),
-                          cameraImgForSize.height.toDouble()),
-                    ),
-                    size: Size(MediaQuery.of(context).size.width,
-                        MediaQuery.of(context).size.height),
-                  )
-                : Center(child: Text("Nothing yet :)")),
-          )
-        ],
+      appBar: AppBar(
+        title: Text('Pose Detection'),
       ),
+      body: _errorMessage != null
+          ? Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.error, size: 64, color: Colors.red),
+                  SizedBox(height: 16),
+                  Text(
+                    _errorMessage!,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(fontSize: 16),
+                  ),
+                  SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed: () {
+                      setState(() {
+                        _errorMessage = null;
+                        cameraInitialized = false;
+                      });
+                      _initCamera();
+                    },
+                    child: Text('Retry'),
+                  ),
+                ],
+              ),
+            )
+          : Column(
+              children: [
+                Expanded(
+                  flex: 2,
+                  child: _initializeControllerFuture == null ||
+                          _cameraController == null
+                      ? Center(child: CircularProgressIndicator())
+                      : FutureBuilder(
+                          future: _initializeControllerFuture,
+                          builder: (context, snapshot) {
+                            if (snapshot.connectionState ==
+                                ConnectionState.done) {
+                              if (snapshot.hasError) {
+                                return Center(
+                                  child: Text(
+                                    'Camera Error: ${snapshot.error}',
+                                    style: TextStyle(color: Colors.red),
+                                  ),
+                                );
+                              }
+                              return ClipRect(
+                                child: AspectRatio(
+                                  aspectRatio:
+                                      _cameraController!.value.aspectRatio,
+                                  child: CameraPreview(_cameraController!),
+                                ),
+                              );
+                            } else {
+                              return Center(child: CircularProgressIndicator());
+                            }
+                          },
+                        ),
+                ),
+                Container(
+                  padding: EdgeInsets.all(16),
+                  child: Text(
+                    _detectionText,
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                Expanded(
+                  flex: 1,
+                  child: poses != null && cameraImgForSize != null
+                      ? CustomPaint(
+                          painter: LandmarkPainter(
+                            poses!,
+                            Size(cameraImgForSize!.width.toDouble(),
+                                cameraImgForSize!.height.toDouble()),
+                          ),
+                          size: Size.infinite,
+                        )
+                      : Center(child: Text("Waiting for pose detection...")),
+                ),
+              ],
+            ),
     );
   }
 }
@@ -262,6 +351,10 @@ class LandmarkPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    if (size.width == 0 || size.height == 0 || imageSize.width == 0 || imageSize.height == 0) {
+      return;
+    }
+
     final scaleX = size.width / imageSize.width;
     final scaleY = size.height / imageSize.height;
 
@@ -273,21 +366,35 @@ class LandmarkPainter extends CustomPainter {
         final y = landmark.y * scaleY;
         final z = landmark.z;
 
-        final radius = 6.0;
+        final radius = 4.0;
         final pointPaint = Paint()
-          ..color = Colors.black
+          ..color = Colors.red
           ..style = PaintingStyle.fill;
 
         canvas.drawCircle(Offset(x, y), radius, pointPaint);
 
-        _drawCoordinateLabel(canvas, x, y, landmark.x, landmark.y, z);
+        // Only draw coordinates for key landmarks to avoid clutter
+        if (_isKeyLandmark(landmark.type)) {
+          _drawCoordinateLabel(canvas, x, y, landmark.x, landmark.y, z);
+        }
       });
     }
   }
 
+  bool _isKeyLandmark(PoseLandmarkType type) {
+    return [
+      PoseLandmarkType.leftShoulder,
+      PoseLandmarkType.rightShoulder,
+      PoseLandmarkType.leftHip,
+      PoseLandmarkType.rightHip,
+      PoseLandmarkType.leftWrist,
+      PoseLandmarkType.rightWrist,
+    ].contains(type);
+  }
+
   void _drawPoseConnections(Canvas canvas, Pose pose, double scaleX, double scaleY) {
     final connectionPaint = Paint()
-      ..color = Colors.black
+      ..color = Colors.blue
       ..strokeWidth = 2.0;
 
     final connections = [
@@ -320,14 +427,13 @@ class LandmarkPainter extends CustomPainter {
   void _drawCoordinateLabel(Canvas canvas, double screenX, double screenY,
       double originalX, double originalY, double z) {
     final coordText =
-        "(${originalX.toStringAsFixed(1)}, ${originalY.toStringAsFixed(1)}, ${z.toStringAsFixed(2)})";
-        print(coordText);
+        "(${originalX.toStringAsFixed(0)}, ${originalY.toStringAsFixed(0)})";
 
     final span = TextSpan(
       style: TextStyle(
-        color: Colors.black,
-        fontSize: 10,
-        backgroundColor: Colors.white.withOpacity(0.8),
+        color: Colors.white,
+        fontSize: 8,
+        backgroundColor: Colors.black.withOpacity(0.7),
       ),
       text: coordText,
     );
