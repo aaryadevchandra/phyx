@@ -3,6 +3,7 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
+import 'angle_utils.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -77,7 +78,7 @@ class _PhyxPoCState extends State<PhyxPoC> with WidgetsBindingObserver {
       _disposeCamera();
 
       _cameras = await availableCameras();
-      
+
       if (_cameras.isEmpty) {
         if (mounted) {
           setState(() {
@@ -107,7 +108,7 @@ class _PhyxPoCState extends State<PhyxPoC> with WidgetsBindingObserver {
       ];
 
       CameraController? controller;
-      
+
       for (final resolution in resolutions) {
         try {
           controller = CameraController(
@@ -139,7 +140,7 @@ class _PhyxPoCState extends State<PhyxPoC> with WidgetsBindingObserver {
       }
 
       _cameraController = controller;
-      
+
       setState(() {
         _isCameraInitialized = true;
         _errorMessage = null;
@@ -147,11 +148,10 @@ class _PhyxPoCState extends State<PhyxPoC> with WidgetsBindingObserver {
 
       // Small delay before starting image stream
       await Future.delayed(Duration(milliseconds: 500));
-      
+
       if (mounted && !_isDisposing && _cameraController != null) {
         _startProcessing();
       }
-
     } catch (e) {
       print("Camera initialization error: $e");
       if (mounted) {
@@ -164,7 +164,9 @@ class _PhyxPoCState extends State<PhyxPoC> with WidgetsBindingObserver {
   }
 
   void _startProcessing() {
-    if (_cameraController == null || !_cameraController!.value.isInitialized || _isDisposing) {
+    if (_cameraController == null ||
+        !_cameraController!.value.isInitialized ||
+        _isDisposing) {
       return;
     }
 
@@ -172,7 +174,7 @@ class _PhyxPoCState extends State<PhyxPoC> with WidgetsBindingObserver {
       _cameraController!.startImageStream((CameraImage image) async {
         if (_isProcessingFrame || _isDisposing) return;
         _isProcessingFrame = true;
-        
+
         if (mounted) {
           setState(() {
             cameraImgForSize = image;
@@ -181,17 +183,17 @@ class _PhyxPoCState extends State<PhyxPoC> with WidgetsBindingObserver {
 
         try {
           InputImage? inputImage = _inputImageFromCameraImage(
-            image, 
-            _cameras[_selectedCameraIdx], 
-            _cameraController!
-          );
-          
+              image, _cameras[_selectedCameraIdx], _cameraController!);
+
           if (inputImage != null && !_isDisposing) {
-            List<Pose> detectedPoses = await _poseDetector.processImage(inputImage);
+            List<Pose> detectedPoses =
+                await _poseDetector.processImage(inputImage);
             if (mounted && !_isDisposing) {
               setState(() {
                 poses = detectedPoses;
-                _detectionText = detectedPoses.isNotEmpty ? "Pose Detected" : "No pose detected";
+                _detectionText = detectedPoses.isNotEmpty
+                    ? "Pose Detected"
+                    : "No pose detected";
               });
             }
           }
@@ -218,8 +220,8 @@ class _PhyxPoCState extends State<PhyxPoC> with WidgetsBindingObserver {
     DeviceOrientation.landscapeRight: 270,
   };
 
-  InputImage? _inputImageFromCameraImage(
-      CameraImage image, CameraDescription camera, CameraController controller) {
+  InputImage? _inputImageFromCameraImage(CameraImage image,
+      CameraDescription camera, CameraController controller) {
     try {
       final sensorOrientation = camera.sensorOrientation;
       InputImageRotation? rotation;
@@ -231,7 +233,8 @@ class _PhyxPoCState extends State<PhyxPoC> with WidgetsBindingObserver {
             _orientations[controller.value.deviceOrientation];
         if (rotationCompensation == null) return null;
         if (camera.lensDirection == CameraLensDirection.front) {
-          rotationCompensation = (sensorOrientation + rotationCompensation) % 360;
+          rotationCompensation =
+              (sensorOrientation + rotationCompensation) % 360;
         } else {
           rotationCompensation =
               (sensorOrientation - rotationCompensation + 360) % 360;
@@ -357,7 +360,7 @@ class _PhyxPoCState extends State<PhyxPoC> with WidgetsBindingObserver {
       );
     }
 
-    return Container(
+    return SizedBox(
       width: double.infinity,
       height: double.infinity,
       child: FittedBox(
@@ -448,14 +451,18 @@ class _PhyxPoCState extends State<PhyxPoC> with WidgetsBindingObserver {
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Icon(
-                        poses?.isNotEmpty == true ? Icons.person : Icons.person_off,
-                        color: poses?.isNotEmpty == true ? Colors.green : Colors.red,
+                        poses?.isNotEmpty == true
+                            ? Icons.person
+                            : Icons.person_off,
+                        color: poses?.isNotEmpty == true
+                            ? Colors.green
+                            : Colors.red,
                       ),
                       SizedBox(width: 8),
                       Text(
                         _detectionText,
                         style: TextStyle(
-                          fontSize: 16, 
+                          fontSize: 16,
                           fontWeight: FontWeight.bold,
                           color: Colors.white,
                         ),
@@ -477,7 +484,10 @@ class LandmarkPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (size.width == 0 || size.height == 0 || imageSize.width == 0 || imageSize.height == 0) {
+    if (size.width == 0 ||
+        size.height == 0 ||
+        imageSize.width == 0 ||
+        imageSize.height == 0) {
       return;
     }
 
@@ -485,6 +495,11 @@ class LandmarkPainter extends CustomPainter {
     final scaleY = size.height / imageSize.height;
 
     for (Pose pose in poses) {
+      final angles = calculatePoseAngles(pose);
+
+      for (final entry in angles.entries) {
+        print('Angle at ${entry.key}: ${entry.value}');
+      }
       _drawPoseConnections(canvas, pose, scaleX, scaleY);
 
       pose.landmarks.forEach((_, landmark) {
@@ -501,7 +516,8 @@ class LandmarkPainter extends CustomPainter {
     }
   }
 
-  void _drawPoseConnections(Canvas canvas, Pose pose, double scaleX, double scaleY) {
+  void _drawPoseConnections(
+      Canvas canvas, Pose pose, double scaleX, double scaleY) {
     final connectionPaint = Paint()
       ..color = Colors.blue
       ..strokeWidth = 3.0;
