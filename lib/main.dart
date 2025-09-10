@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_mlkit_pose_detection/google_mlkit_pose_detection.dart';
 import 'angle_utils.dart';
+import 'squat_detector.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -18,6 +19,7 @@ class PhyxPoC extends StatefulWidget {
 }
 
 class _PhyxPoCState extends State<PhyxPoC> with WidgetsBindingObserver {
+  final squatDetector = SquatDetector();
   CameraController? _cameraController;
   bool _isCameraInitialized = false;
   List<CameraDescription> _cameras = [];
@@ -163,6 +165,56 @@ class _PhyxPoCState extends State<PhyxPoC> with WidgetsBindingObserver {
     }
   }
 
+  // void _startProcessing() {
+  //   if (_cameraController == null ||
+  //       !_cameraController!.value.isInitialized ||
+  //       _isDisposing) {
+  //     return;
+  //   }
+
+  //   try {
+  //     _cameraController!.startImageStream((CameraImage image) async {
+  //       if (_isProcessingFrame || _isDisposing) return;
+  //       _isProcessingFrame = true;
+
+  //       if (mounted) {
+  //         setState(() {
+  //           cameraImgForSize = image;
+  //         });
+  //       }
+
+  //       try {
+  //         InputImage? inputImage = _inputImageFromCameraImage(
+  //             image, _cameras[_selectedCameraIdx], _cameraController!);
+
+  //         if (inputImage != null && !_isDisposing) {
+  //           List<Pose> detectedPoses =
+  //               await _poseDetector.processImage(inputImage);
+  //           if (mounted && !_isDisposing) {
+  //             setState(() {
+  //               poses = detectedPoses;
+  //               _detectionText = detectedPoses.isNotEmpty
+  //                   ? "Pose Detected"
+  //                   : "No pose detected";
+  //             });
+  //           }
+  //         }
+  //       } catch (e) {
+  //         print("Error processing frame: $e");
+  //       } finally {
+  //         _isProcessingFrame = false;
+  //       }
+  //     });
+  //   } catch (e) {
+  //     print("Error starting image stream: $e");
+  //     if (mounted) {
+  //       setState(() {
+  //         _errorMessage = "Failed to start camera stream: ${e.toString()}";
+  //       });
+  //     }
+  //   }
+  // }
+
   void _startProcessing() {
     if (_cameraController == null ||
         !_cameraController!.value.isInitialized ||
@@ -189,6 +241,11 @@ class _PhyxPoCState extends State<PhyxPoC> with WidgetsBindingObserver {
             List<Pose> detectedPoses =
                 await _poseDetector.processImage(inputImage);
             if (mounted && !_isDisposing) {
+              // ---- SQUAT REP DETECTION LOGIC ----
+              if (detectedPoses.isNotEmpty) {
+                final angles = calculatePoseAngles(detectedPoses.first);
+                squatDetector.update(angles); // <--- update logic!
+              }
               setState(() {
                 poses = detectedPoses;
                 _detectionText = detectedPoses.isNotEmpty
@@ -441,6 +498,30 @@ class _PhyxPoCState extends State<PhyxPoC> with WidgetsBindingObserver {
                             ),
                           ),
                         ),
+                      // Rep Count Overlay
+                      Positioned(
+                        top: 32,
+                        left: 0,
+                        right: 0,
+                        child: Center(
+                          child: Container(
+                            padding: EdgeInsets.symmetric(
+                                vertical: 8, horizontal: 24),
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.7),
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: Text(
+                              "Reps: ${squatDetector.repCount}",
+                              style: TextStyle(
+                                color: Colors.yellow,
+                                fontSize: 32,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -497,12 +578,9 @@ class LandmarkPainter extends CustomPainter {
     for (Pose pose in poses) {
       final angles = calculatePoseAngles(pose);
 
-      for (final entry in angles.entries) {
-        print('Angle at ${entry.key}: ${entry.value}');
-      }
       _drawPoseConnections(canvas, pose, scaleX, scaleY);
 
-      pose.landmarks.forEach((_, landmark) {
+      pose.landmarks.forEach((type, landmark) {
         final x = landmark.x * scaleX;
         final y = landmark.y * scaleY;
 
@@ -512,6 +590,27 @@ class LandmarkPainter extends CustomPainter {
           ..style = PaintingStyle.fill;
 
         canvas.drawCircle(Offset(x, y), radius, pointPaint);
+
+        // Display angle at this joint if present
+        final jointName = type.name; // PoseLandmarkType's enum name
+        if (angles.containsKey(jointName)) {
+          final textSpan = TextSpan(
+            text: angles[jointName]!.toStringAsFixed(0) + '°',
+            style: const TextStyle(
+              color: Colors.yellow,
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              backgroundColor: Colors.black54,
+            ),
+          );
+          final textPainter = TextPainter(
+            text: textSpan,
+            textDirection: TextDirection.ltr,
+          );
+          textPainter.layout();
+          // Draw text slightly above the joint
+          textPainter.paint(canvas, Offset(x - textPainter.width / 2, y - 28));
+        }
       });
     }
   }
@@ -554,3 +653,84 @@ class LandmarkPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
+
+
+// class LandmarkPainter extends CustomPainter {
+//   final List<Pose> poses;
+//   final Size imageSize;
+
+//   LandmarkPainter(this.poses, this.imageSize);
+
+//   @override
+//   void paint(Canvas canvas, Size size) {
+//     if (size.width == 0 ||
+//         size.height == 0 ||
+//         imageSize.width == 0 ||
+//         imageSize.height == 0) {
+//       return;
+//     }
+
+//     final scaleX = size.width / imageSize.width;
+//     final scaleY = size.height / imageSize.height;
+
+//     for (Pose pose in poses) {
+//       final angles = calculatePoseAngles(pose);
+
+//       for (final entry in angles.entries) {
+//         print('Angle at ${entry.key}: ${entry.value}');
+//       }
+//       _drawPoseConnections(canvas, pose, scaleX, scaleY);
+
+//       pose.landmarks.forEach((_, landmark) {
+//         final x = landmark.x * scaleX;
+//         final y = landmark.y * scaleY;
+
+//         final radius = 6.0;
+//         final pointPaint = Paint()
+//           ..color = Colors.red
+//           ..style = PaintingStyle.fill;
+
+//         canvas.drawCircle(Offset(x, y), radius, pointPaint);
+//       });
+//     }
+//   }
+
+//   void _drawPoseConnections(
+//       Canvas canvas, Pose pose, double scaleX, double scaleY) {
+//     final connectionPaint = Paint()
+//       ..color = Colors.blue
+//       ..strokeWidth = 3.0;
+
+//     final connections = [
+//       [PoseLandmarkType.leftShoulder, PoseLandmarkType.rightShoulder],
+//       [PoseLandmarkType.leftHip, PoseLandmarkType.rightHip],
+//       [PoseLandmarkType.leftShoulder, PoseLandmarkType.leftElbow],
+//       [PoseLandmarkType.leftElbow, PoseLandmarkType.leftWrist],
+//       [PoseLandmarkType.rightShoulder, PoseLandmarkType.rightElbow],
+//       [PoseLandmarkType.rightElbow, PoseLandmarkType.rightWrist],
+//       [PoseLandmarkType.leftHip, PoseLandmarkType.leftKnee],
+//       [PoseLandmarkType.leftKnee, PoseLandmarkType.leftAnkle],
+//       [PoseLandmarkType.rightHip, PoseLandmarkType.rightKnee],
+//       [PoseLandmarkType.rightKnee, PoseLandmarkType.rightAnkle],
+//       [PoseLandmarkType.leftShoulder, PoseLandmarkType.leftHip],
+//       [PoseLandmarkType.rightShoulder, PoseLandmarkType.rightHip],
+//     ];
+
+//     for (var pair in connections) {
+//       final p1 = pose.landmarks[pair[0]];
+//       final p2 = pose.landmarks[pair[1]];
+
+//       if (p1 != null && p2 != null) {
+//         canvas.drawLine(
+//           Offset(p1.x * scaleX, p1.y * scaleY),
+//           Offset(p2.x * scaleX, p2.y * scaleY),
+//           connectionPaint,
+//         );
+//       }
+//     }
+//   }
+
+//   @override
+//   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+// }
+
