@@ -165,56 +165,6 @@ class _PhyxPoCState extends State<PhyxPoC> with WidgetsBindingObserver {
     }
   }
 
-  // void _startProcessing() {
-  //   if (_cameraController == null ||
-  //       !_cameraController!.value.isInitialized ||
-  //       _isDisposing) {
-  //     return;
-  //   }
-
-  //   try {
-  //     _cameraController!.startImageStream((CameraImage image) async {
-  //       if (_isProcessingFrame || _isDisposing) return;
-  //       _isProcessingFrame = true;
-
-  //       if (mounted) {
-  //         setState(() {
-  //           cameraImgForSize = image;
-  //         });
-  //       }
-
-  //       try {
-  //         InputImage? inputImage = _inputImageFromCameraImage(
-  //             image, _cameras[_selectedCameraIdx], _cameraController!);
-
-  //         if (inputImage != null && !_isDisposing) {
-  //           List<Pose> detectedPoses =
-  //               await _poseDetector.processImage(inputImage);
-  //           if (mounted && !_isDisposing) {
-  //             setState(() {
-  //               poses = detectedPoses;
-  //               _detectionText = detectedPoses.isNotEmpty
-  //                   ? "Pose Detected"
-  //                   : "No pose detected";
-  //             });
-  //           }
-  //         }
-  //       } catch (e) {
-  //         print("Error processing frame: $e");
-  //       } finally {
-  //         _isProcessingFrame = false;
-  //       }
-  //     });
-  //   } catch (e) {
-  //     print("Error starting image stream: $e");
-  //     if (mounted) {
-  //       setState(() {
-  //         _errorMessage = "Failed to start camera stream: ${e.toString()}";
-  //       });
-  //     }
-  //   }
-  // }
-
   void _startProcessing() {
     if (_cameraController == null ||
         !_cameraController!.value.isInitialized ||
@@ -238,13 +188,28 @@ class _PhyxPoCState extends State<PhyxPoC> with WidgetsBindingObserver {
               image, _cameras[_selectedCameraIdx], _cameraController!);
 
           if (inputImage != null && !_isDisposing) {
+            final stopwatch = Stopwatch()..start();
             List<Pose> detectedPoses =
                 await _poseDetector.processImage(inputImage);
+            stopwatch.stop();
+            final latencyMs = stopwatch.elapsedMilliseconds;
+            print("Inference latency: $latencyMs ms");
+
+            // (Optional) Log to a list or file for offline analysis
+            // inferenceLatencies.add(latencyMs);
+
             if (mounted && !_isDisposing) {
               // ---- SQUAT REP DETECTION LOGIC ----
               if (detectedPoses.isNotEmpty) {
+                final angleStopwatch = Stopwatch()..start();
                 final angles = calculatePoseAngles(detectedPoses.first);
-                squatDetector.update(angles); // <--- update logic!
+                angleStopwatch.stop();
+                final angleLatencyMs =
+                    angleStopwatch.elapsedMicroseconds / 1000.0;
+                print(
+                    "Angle calculation latency: ${angleLatencyMs.toStringAsFixed(2)} ms");
+
+                squatDetector.update(angles);
               }
               setState(() {
                 poses = detectedPoses;
@@ -653,84 +618,3 @@ class LandmarkPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
-
-
-// class LandmarkPainter extends CustomPainter {
-//   final List<Pose> poses;
-//   final Size imageSize;
-
-//   LandmarkPainter(this.poses, this.imageSize);
-
-//   @override
-//   void paint(Canvas canvas, Size size) {
-//     if (size.width == 0 ||
-//         size.height == 0 ||
-//         imageSize.width == 0 ||
-//         imageSize.height == 0) {
-//       return;
-//     }
-
-//     final scaleX = size.width / imageSize.width;
-//     final scaleY = size.height / imageSize.height;
-
-//     for (Pose pose in poses) {
-//       final angles = calculatePoseAngles(pose);
-
-//       for (final entry in angles.entries) {
-//         print('Angle at ${entry.key}: ${entry.value}');
-//       }
-//       _drawPoseConnections(canvas, pose, scaleX, scaleY);
-
-//       pose.landmarks.forEach((_, landmark) {
-//         final x = landmark.x * scaleX;
-//         final y = landmark.y * scaleY;
-
-//         final radius = 6.0;
-//         final pointPaint = Paint()
-//           ..color = Colors.red
-//           ..style = PaintingStyle.fill;
-
-//         canvas.drawCircle(Offset(x, y), radius, pointPaint);
-//       });
-//     }
-//   }
-
-//   void _drawPoseConnections(
-//       Canvas canvas, Pose pose, double scaleX, double scaleY) {
-//     final connectionPaint = Paint()
-//       ..color = Colors.blue
-//       ..strokeWidth = 3.0;
-
-//     final connections = [
-//       [PoseLandmarkType.leftShoulder, PoseLandmarkType.rightShoulder],
-//       [PoseLandmarkType.leftHip, PoseLandmarkType.rightHip],
-//       [PoseLandmarkType.leftShoulder, PoseLandmarkType.leftElbow],
-//       [PoseLandmarkType.leftElbow, PoseLandmarkType.leftWrist],
-//       [PoseLandmarkType.rightShoulder, PoseLandmarkType.rightElbow],
-//       [PoseLandmarkType.rightElbow, PoseLandmarkType.rightWrist],
-//       [PoseLandmarkType.leftHip, PoseLandmarkType.leftKnee],
-//       [PoseLandmarkType.leftKnee, PoseLandmarkType.leftAnkle],
-//       [PoseLandmarkType.rightHip, PoseLandmarkType.rightKnee],
-//       [PoseLandmarkType.rightKnee, PoseLandmarkType.rightAnkle],
-//       [PoseLandmarkType.leftShoulder, PoseLandmarkType.leftHip],
-//       [PoseLandmarkType.rightShoulder, PoseLandmarkType.rightHip],
-//     ];
-
-//     for (var pair in connections) {
-//       final p1 = pose.landmarks[pair[0]];
-//       final p2 = pose.landmarks[pair[1]];
-
-//       if (p1 != null && p2 != null) {
-//         canvas.drawLine(
-//           Offset(p1.x * scaleX, p1.y * scaleY),
-//           Offset(p2.x * scaleX, p2.y * scaleY),
-//           connectionPaint,
-//         );
-//       }
-//     }
-//   }
-
-//   @override
-//   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
-// }
-
